@@ -1,4 +1,4 @@
-# EXECUTION
+## EXECUTION
 
 ```
 1.  ===> Debug Mode -- Brings Vulnerability to Android Phone.
@@ -10,7 +10,7 @@
 ./scrcpy
 ````
 
-# ALTERNATIVE APP : Airdroid Cast (android app - Playstore)
+## ALTERNATIVE APP : Airdroid Cast (android app - Playstore)
 
 **This GitHub repo (<https://github.com/Genymobile/scrcpy>) is the only official
 source for the project. Do not download releases from random websites, even if
