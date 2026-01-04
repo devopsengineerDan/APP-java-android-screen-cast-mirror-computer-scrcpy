@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "options.h"
@@ -13,6 +14,7 @@
 #include "util/str.h"
 #include "util/strbuf.h"
 #include "util/term.h"
+#include "util/tick.h"
 
 #define STR_IMPL_(x) #x
 #define STR(x) STR_IMPL_(x)
@@ -50,6 +52,7 @@ enum {
     OPT_POWER_OFF_ON_CLOSE,
     OPT_V4L2_SINK,
     OPT_DISPLAY_BUFFER,
+    OPT_VIDEO_BUFFER,
     OPT_V4L2_BUFFER,
     OPT_TUNNEL_HOST,
     OPT_TUNNEL_PORT,
@@ -102,6 +105,15 @@ enum {
     OPT_NO_MOUSE_HOVER,
     OPT_AUDIO_DUP,
     OPT_GAMEPAD,
+    OPT_NEW_DISPLAY,
+    OPT_LIST_APPS,
+    OPT_START_APP,
+    OPT_SCREEN_OFF_TIMEOUT,
+    OPT_CAPTURE_ORIENTATION,
+    OPT_ANGLE,
+    OPT_NO_VD_SYSTEM_DECORATIONS,
+    OPT_NO_VD_DESTROY_CONTENT,
+    OPT_DISPLAY_IME_POLICY,
 };
 
 struct sc_option {
@@ -142,6 +154,13 @@ static const struct sc_option options[] = {
         .longopt_id = OPT_ALWAYS_ON_TOP,
         .longopt = "always-on-top",
         .text = "Make scrcpy window always on top (above other windows).",
+    },
+    {
+        .longopt_id = OPT_ANGLE,
+        .longopt = "angle",
+        .argdesc = "degrees",
+        .text = "Rotate the video content by a custom angle, in degrees "
+                "(clockwise).",
     },
     {
         .longopt_id = OPT_AUDIO_BIT_RATE,
@@ -198,13 +217,31 @@ static const struct sc_option options[] = {
         .longopt_id = OPT_AUDIO_SOURCE,
         .longopt = "audio-source",
         .argdesc = "source",
-        .text = "Select the audio source (output, mic or playback).\n"
-                "The \"output\" source forwards the whole audio output, and "
-                "disables playback on the device.\n"
-                "The \"playback\" source captures the audio playback (Android "
-                "apps can opt-out, so the whole output is not necessarily "
+        .text = "Select the audio source. Possible values are:\n"
+                " - \"output\": forwards the whole audio output, and disables "
+                "playback on the device.\n"
+                " - \"playback\": captures the audio playback (Android apps "
+                "can opt-out, so the whole output is not necessarily "
                 "captured).\n"
-                "The \"mic\" source captures the microphone.\n"
+                " - \"mic\": captures the microphone.\n"
+                " - \"mic-unprocessed\": captures the microphone unprocessed "
+                "(raw) sound.\n"
+                " - \"mic-camcorder\": captures the microphone tuned for video "
+                "recording, with the same orientation as the camera if "
+                "available.\n"
+                " - \"mic-voice-recognition\": captures the microphone tuned "
+                "for voice recognition.\n"
+                " - \"mic-voice-communication\": captures the microphone tuned "
+                "for voice communications (it will for instance take advantage "
+                "of echo cancellation or automatic gain control if "
+                "available).\n"
+                " - \"voice-call\": captures voice call.\n"
+                " - \"voice-call-uplink\": captures voice call uplink only.\n"
+                " - \"voice-call-downlink\": captures voice call downlink "
+                "only.\n"
+                " - \"voice-performance\": captures audio meant to be "
+                "processed for live performance (karaoke), includes both the "
+                "microphone and the device playback.\n"
                 "Default is output.",
     },
     {
@@ -241,19 +278,19 @@ static const struct sc_option options[] = {
                 "\"1.6\")."
     },
     {
-        .longopt_id = OPT_CAMERA_ID,
-        .longopt = "camera-id",
-        .argdesc = "id",
-        .text = "Specify the device camera id to mirror.\n"
-                "The available camera ids can be listed by:\n"
-                "    scrcpy --list-cameras",
-    },
-    {
         .longopt_id = OPT_CAMERA_FACING,
         .longopt = "camera-facing",
         .argdesc = "facing",
         .text = "Select the device camera by its facing direction.\n"
                 "Possible values are \"front\", \"back\" and \"external\".",
+    },
+    {
+        .longopt_id = OPT_CAMERA_FPS,
+        .longopt = "camera-fps",
+        .argdesc = "value",
+        .text = "Specify the camera capture frame rate.\n"
+                "If not specified, Android's default frame rate (30 fps) is "
+                "used.",
     },
     {
         .longopt_id = OPT_CAMERA_HIGH_SPEED,
@@ -263,18 +300,35 @@ static const struct sc_option options[] = {
                 "rates, listed by --list-camera-sizes.",
     },
     {
+        .longopt_id = OPT_CAMERA_ID,
+        .longopt = "camera-id",
+        .argdesc = "id",
+        .text = "Specify the device camera id to mirror.\n"
+                "The available camera ids can be listed by:\n"
+                "    scrcpy --list-cameras",
+    },
+    {
         .longopt_id = OPT_CAMERA_SIZE,
         .longopt = "camera-size",
         .argdesc = "<width>x<height>",
         .text = "Specify an explicit camera capture size.",
     },
     {
-        .longopt_id = OPT_CAMERA_FPS,
-        .longopt = "camera-fps",
+        .longopt_id = OPT_CAPTURE_ORIENTATION,
+        .longopt = "capture-orientation",
         .argdesc = "value",
-        .text = "Specify the camera capture frame rate.\n"
-                "If not specified, Android's default frame rate (30 fps) is "
-                "used.",
+        .text = "Set the capture video orientation.\n"
+                "Possible values are 0, 90, 180, 270, flip0, flip90, flip180 "
+                "and flip270, possibly prefixed by '@'.\n"
+                "The number represents the clockwise rotation in degrees; the "
+                "flip\" keyword applies a horizontal flip before the "
+                "rotation.\n"
+                "If a leading '@' is passed (@90) for display capture, then "
+                "the rotation is locked, and is relative to the natural device "
+                "orientation.\n"
+                "If '@' is passed alone, then the rotation is locked to the "
+                "initial device orientation.\n"
+                "Default is 0.",
     },
     {
         // Not really deprecated (--codec has never been released), but without
@@ -297,8 +351,7 @@ static const struct sc_option options[] = {
         .argdesc = "width:height:x:y",
         .text = "Crop the device screen on the server.\n"
                 "The values are expressed in the device natural orientation "
-                "(typically, portrait for a phone, landscape for a tablet). "
-                "Any --max-size value is computed on the cropped size.",
+                "(typically, portrait for a phone, landscape for a tablet).",
     },
     {
         .shortopt = 'd',
@@ -318,12 +371,10 @@ static const struct sc_option options[] = {
         .argdesc = "id",
     },
     {
+        // deprecated
         .longopt_id = OPT_DISPLAY_BUFFER,
         .longopt = "display-buffer",
         .argdesc = "ms",
-        .text = "Add a buffering delay (in milliseconds) before displaying. "
-                "This increases latency to compensate for jitter.\n"
-                "Default is 0 (no buffering).",
     },
     {
         .longopt_id = OPT_DISPLAY_ID,
@@ -333,6 +384,19 @@ static const struct sc_option options[] = {
                 "The available display ids can be listed by:\n"
                 "    scrcpy --list-displays\n"
                 "Default is 0.",
+    },
+    {
+        .longopt_id = OPT_DISPLAY_IME_POLICY,
+        .longopt = "display-ime-policy",
+        .argdesc = "value",
+        .text = "Set the policy for selecting where the IME should be "
+                "displayed.\n"
+                "Possible values are \"local\", \"fallback\" and \"hide\".\n"
+                "\"local\" means that the IME should appear on the local "
+                "display.\n"
+                "\"fallback\" means that the IME should appear on a fallback "
+                "display (the default display).\n"
+                "\"hide\" means that the IME should be hidden.",
     },
     {
         .longopt_id = OPT_DISPLAY_ORIENTATION,
@@ -443,6 +507,11 @@ static const struct sc_option options[] = {
                 "expected when setting the device clipboard programmatically.",
     },
     {
+        .longopt_id = OPT_LIST_APPS,
+        .longopt = "list-apps",
+        .text = "List Android apps installed on the device.",
+    },
+    {
         .longopt_id = OPT_LIST_CAMERAS,
         .longopt = "list-cameras",
         .text = "List device cameras.",
@@ -463,18 +532,10 @@ static const struct sc_option options[] = {
         .text = "List video and audio encoders available on the device.",
     },
     {
+        // deprecated
         .longopt_id = OPT_LOCK_VIDEO_ORIENTATION,
         .longopt = "lock-video-orientation",
         .argdesc = "value",
-        .optional_arg = true,
-        .text = "Lock capture video orientation to value.\n"
-                "Possible values are \"unlocked\", \"initial\" (locked to the "
-                "initial orientation), 0, 90, 180 and 270. The values "
-                "represent the clockwise rotation from the natural device "
-                "orientation, in degrees.\n"
-                "Default is \"unlocked\".\n"
-                "Passing the option without argument is equivalent to passing "
-                "\"initial\".",
     },
     {
         .shortopt = 'm',
@@ -558,6 +619,20 @@ static const struct sc_option options[] = {
                 "to --no-video-playback --no-audio-playback).",
     },
     {
+        .longopt_id = OPT_NEW_DISPLAY,
+        .longopt = "new-display",
+        .argdesc = "[<width>x<height>][/<dpi>]",
+        .optional_arg = true,
+        .text = "Create a new display with the specified resolution and "
+                "density. If not provided, they default to the main display "
+                "dimensions and DPI.\n"
+                "Examples:\n"
+                "    --new-display=1920x1080\n"
+                "    --new-display=1920x1080/420  # force 420 dpi\n"
+                "    --new-display         # main display size and density\n"
+                "    --new-display=/240    # main display size and 240 dpi",
+    },
+    {
         .longopt_id = OPT_NO_AUDIO,
         .longopt = "no-audio",
         .text = "Disable audio forwarding.",
@@ -620,6 +695,20 @@ static const struct sc_option options[] = {
         .text = "Do not power on the device on start.",
     },
     {
+        .longopt_id = OPT_NO_VD_DESTROY_CONTENT,
+        .longopt = "no-vd-destroy-content",
+        .text = "Disable virtual display \"destroy content on removal\" "
+                "flag.\n"
+                "With this option, when the virtual display is closed, the "
+                "running apps are moved to the main display rather than being "
+                "destroyed.",
+    },
+    {
+        .longopt_id = OPT_NO_VD_SYSTEM_DECORATIONS,
+        .longopt = "no-vd-system-decorations",
+        .text = "Disable virtual display system decorations flag.",
+    },
+    {
         .longopt_id = OPT_NO_VIDEO,
         .longopt = "no-video",
         .text = "Disable video forwarding.",
@@ -632,8 +721,7 @@ static const struct sc_option options[] = {
     {
         .longopt_id = OPT_NO_WINDOW,
         .longopt = "no-window",
-        .text = "Disable scrcpy window. Implies --no-video-playback and "
-                "--no-control.",
+        .text = "Disable scrcpy window. Implies --no-video-playback.",
     },
     {
         .longopt_id = OPT_ORIENTATION,
@@ -772,6 +860,13 @@ static const struct sc_option options[] = {
         .text = "Turn the device screen off immediately.",
     },
     {
+        .longopt_id = OPT_SCREEN_OFF_TIMEOUT,
+        .longopt = "screen-off-timeout",
+        .argdesc = "seconds",
+        .text = "Set the screen off timeout while scrcpy is running (restore "
+                "the initial value on exit).",
+    },
+    {
         .longopt_id = OPT_SHORTCUT_MOD,
         .longopt = "shortcut-mod",
         .argdesc = "key[+...][,...]",
@@ -785,6 +880,20 @@ static const struct sc_option options[] = {
                 "Default is \"lalt,lsuper\" (left-Alt or left-Super).",
     },
     {
+        .longopt_id = OPT_START_APP,
+        .longopt = "start-app",
+        .argdesc = "name",
+        .text = "Start an Android app, by its exact package name.\n"
+                "Add a '?' prefix to select an app whose name starts with the "
+                "given name, case-insensitive (retrieving app names on the "
+                "device may take some time):\n"
+                "    scrcpy --start-app=?firefox\n"
+                "Add a '+' prefix to force-stop before starting the app:\n"
+                "    scrcpy --new-display --start-app=+org.mozilla.firefox\n"
+                "Both prefixes can be used, in that order:\n"
+                "    scrcpy --start-app=+?firefox",
+    },
+    {
         .shortopt = 't',
         .longopt = "show-touches",
         .text = "Enable \"show touches\" on start, restore the initial value "
@@ -794,16 +903,17 @@ static const struct sc_option options[] = {
     {
         .longopt_id = OPT_TCPIP,
         .longopt = "tcpip",
-        .argdesc = "ip[:port]",
+        .argdesc = "[+]ip[:port]",
         .optional_arg = true,
-        .text = "Configure and reconnect the device over TCP/IP.\n"
+        .text = "Configure and connect the device over TCP/IP.\n"
                 "If a destination address is provided, then scrcpy connects to "
                 "this address before starting. The device must listen on the "
                 "given TCP port (default is 5555).\n"
                 "If no destination address is provided, then scrcpy attempts "
                 "to find the IP address of the current device (typically "
                 "connected over USB), enables TCP/IP mode, then connects to "
-                "this address before starting.",
+                "this address before starting.\n"
+                "Prefix the address with a '+' to force a reconnection.",
     },
     {
         .longopt_id = OPT_TIME_LIMIT,
@@ -851,8 +961,6 @@ static const struct sc_option options[] = {
         .longopt = "v4l2-sink",
         .argdesc = "/dev/videoN",
         .text = "Output to v4l2loopback device.\n"
-                "It requires to lock the video orientation (see "
-                "--lock-video-orientation).\n"
                 "This feature is only available on Linux.",
     },
     {
@@ -861,10 +969,19 @@ static const struct sc_option options[] = {
         .argdesc = "ms",
         .text = "Add a buffering delay (in milliseconds) before pushing "
                 "frames. This increases latency to compensate for jitter.\n"
-                "This option is similar to --display-buffer, but specific to "
+                "This option is similar to --video-buffer, but specific to "
                 "V4L2 sink.\n"
                 "Default is 0 (no buffering).\n"
                 "This option is only available on Linux.",
+    },
+    {
+        .longopt_id = OPT_VIDEO_BUFFER,
+        .longopt = "video-buffer",
+        .argdesc = "ms",
+        .text = "Add a buffering delay (in milliseconds) before displaying "
+                "video frames.\n"
+                "This increases latency to compensate for jitter.\n"
+                "Default is 0 (no buffering).",
     },
     {
         .longopt_id = OPT_VIDEO_CODEC,
@@ -978,6 +1095,10 @@ static const struct sc_shortcut shortcuts[] = {
         .text = "Unpause display",
     },
     {
+        .shortcuts = { "MOD+Shift+r" },
+        .text = "Reset video capture/encoding",
+    },
+    {
         .shortcuts = { "MOD+g" },
         .text = "Resize window to 1:1 (pixel-perfect)",
     },
@@ -1072,7 +1193,11 @@ static const struct sc_shortcut shortcuts[] = {
     },
     {
         .shortcuts = { "Shift+click-and-move" },
-        .text = "Tilt (slide vertically with two fingers)",
+        .text = "Tilt vertically (slide with 2 fingers)",
+    },
+    {
+        .shortcuts = { "Ctrl+Shift+click-and-move" },
+        .text = "Tilt horizontally (slide with 2 fingers)",
     },
     {
         .shortcuts = { "Drag & drop APK file" },
@@ -1522,75 +1647,22 @@ parse_audio_output_buffer(const char *s, sc_tick *tick) {
 }
 
 static bool
-parse_lock_video_orientation(const char *s,
-                             enum sc_lock_video_orientation *lock_mode) {
-    if (!s || !strcmp(s, "initial")) {
-        // Without argument, lock the initial orientation
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_INITIAL;
+parse_display_ime_policy(const char *s, enum sc_display_ime_policy *policy) {
+    if (!strcmp(s, "local")) {
+        *policy = SC_DISPLAY_IME_POLICY_LOCAL;
         return true;
     }
-
-    if (!strcmp(s, "unlocked")) {
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_UNLOCKED;
+    if (!strcmp(s, "fallback")) {
+        *policy = SC_DISPLAY_IME_POLICY_FALLBACK;
         return true;
     }
-
-    if (!strcmp(s, "0")) {
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_0;
+    if (!strcmp(s, "hide")) {
+        *policy = SC_DISPLAY_IME_POLICY_HIDE;
         return true;
     }
-
-    if (!strcmp(s, "90")) {
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_90;
-        return true;
-    }
-
-    if (!strcmp(s, "180")) {
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_180;
-        return true;
-    }
-
-    if (!strcmp(s, "270")) {
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_270;
-        return true;
-    }
-
-    if (!strcmp(s, "1")) {
-        LOGW("--lock-video-orientation=1 is deprecated, use "
-             "--lock-video-orientation=270 instead.");
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_270;
-        return true;
-    }
-
-    if (!strcmp(s, "2")) {
-        LOGW("--lock-video-orientation=2 is deprecated, use "
-             "--lock-video-orientation=180 instead.");
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_180;
-        return true;
-    }
-
-    if (!strcmp(s, "3")) {
-        LOGW("--lock-video-orientation=3 is deprecated, use "
-             "--lock-video-orientation=90 instead.");
-        *lock_mode = SC_LOCK_VIDEO_ORIENTATION_90;
-        return true;
-    }
-
-    LOGE("Unsupported --lock-video-orientation value: %s (expected initial, "
-         "unlocked, 0, 90, 180 or 270).", s);
+    LOGE("Unsupported display IME policy: %s (expected local, fallback or "
+         "hide)", s);
     return false;
-}
-
-static bool
-parse_rotation(const char *s, uint8_t *rotation) {
-    long value;
-    bool ok = parse_integer_arg(s, &value, false, 0, 3, "rotation");
-    if (!ok) {
-        return false;
-    }
-
-    *rotation = (uint8_t) value;
-    return true;
 }
 
 static bool
@@ -1630,6 +1702,32 @@ parse_orientation(const char *s, enum sc_orientation *orientation) {
     LOGE("Unsupported orientation: %s (expected 0, 90, 180, 270, flip0, "
          "flip90, flip180 or flip270)", optarg);
     return false;
+}
+
+static bool
+parse_capture_orientation(const char *s, enum sc_orientation *orientation,
+                          enum sc_orientation_lock *lock) {
+    if (*s == '\0') {
+        LOGE("Capture orientation may not be empty (expected 0, 90, 180, 270, "
+             "flip0, flip90, flip180 or flip270, possibly prefixed by '@')");
+        return false;
+    }
+
+    // Lock the orientation by a leading '@'
+    if (s[0] == '@') {
+        // Consume '@'
+        ++s;
+        if (*s == '\0') {
+            // Only '@': lock to the initial orientation (orientation is unused)
+            *lock = SC_ORIENTATION_LOCKED_INITIAL;
+            return true;
+        }
+        *lock = SC_ORIENTATION_LOCKED_VALUE;
+    } else {
+        *lock = SC_ORIENTATION_UNLOCKED;
+    }
+
+    return parse_orientation(s, orientation);
 }
 
 static bool
@@ -1956,8 +2054,50 @@ parse_audio_source(const char *optarg, enum sc_audio_source *source) {
         return true;
     }
 
-    LOGE("Unsupported audio source: %s (expected output, mic or playback)",
-         optarg);
+    if (!strcmp(optarg, "mic-unprocessed")) {
+        *source = SC_AUDIO_SOURCE_MIC_UNPROCESSED;
+        return true;
+    }
+
+    if (!strcmp(optarg, "mic-camcorder")) {
+        *source = SC_AUDIO_SOURCE_MIC_CAMCORDER;
+        return true;
+    }
+
+    if (!strcmp(optarg, "mic-voice-recognition")) {
+        *source = SC_AUDIO_SOURCE_MIC_VOICE_RECOGNITION;
+        return true;
+    }
+
+    if (!strcmp(optarg, "mic-voice-communication")) {
+        *source = SC_AUDIO_SOURCE_MIC_VOICE_COMMUNICATION;
+        return true;
+    }
+
+    if (!strcmp(optarg, "voice-call")) {
+        *source = SC_AUDIO_SOURCE_VOICE_CALL;
+        return true;
+    }
+
+    if (!strcmp(optarg, "voice-call-uplink")) {
+        *source = SC_AUDIO_SOURCE_VOICE_CALL_UPLINK;
+        return true;
+    }
+
+    if (!strcmp(optarg, "voice-call-downlink")) {
+        *source = SC_AUDIO_SOURCE_VOICE_CALL_DOWNLINK;
+        return true;
+    }
+
+    if (!strcmp(optarg, "voice-performance")) {
+        *source = SC_AUDIO_SOURCE_VOICE_PERFORMANCE;
+        return true;
+    }
+
+    LOGE("Unsupported audio source: %s (expected output, mic, playback, "
+         "mic-unprocessed, mic-camcorder, mic-voice-recognition, "
+         "mic-voice-communication, voice-call, voice-call-uplink, "
+         "voice-call-downlink, voice-performance)", optarg);
     return false;
 }
 
@@ -2103,6 +2243,20 @@ parse_time_limit(const char *s, sc_tick *tick) {
 }
 
 static bool
+parse_screen_off_timeout(const char *s, sc_tick *tick) {
+    long value;
+    // value in seconds, but must fit in 31 bits in milliseconds
+    bool ok = parse_integer_arg(s, &value, false, 0, 0x7FFFFFFF / 1000,
+                                "screen off timeout");
+    if (!ok) {
+        return false;
+    }
+
+    *tick = SC_TICK_FROM_SEC(value);
+    return true;
+}
+
+static bool
 parse_pause_on_exit(const char *s, enum sc_pause_on_exit *pause_on_exit) {
     if (!s || !strcmp(s, "true")) {
         *pause_on_exit = SC_PAUSE_ON_EXIT_TRUE;
@@ -2227,8 +2381,8 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 opts->crop = optarg;
                 break;
             case OPT_DISPLAY:
-                LOGW("--display is deprecated, use --display-id instead.");
-                // fall through
+                LOGE("--display has been removed, use --display-id instead.");
+                return false;
             case OPT_DISPLAY_ID:
                 if (!parse_display_id(optarg, &opts->display_id)) {
                     return false;
@@ -2292,8 +2446,13 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                      "--mouse=uhid instead.");
                 return false;
             case OPT_LOCK_VIDEO_ORIENTATION:
-                if (!parse_lock_video_orientation(optarg,
-                        &opts->lock_video_orientation)) {
+                LOGE("--lock-video-orientation has been removed, use "
+                     "--capture-orientation instead.");
+                return false;
+            case OPT_CAPTURE_ORIENTATION:
+                if (!parse_capture_orientation(optarg,
+                                          &opts->capture_orientation,
+                                          &opts->capture_orientation_lock)) {
                     return false;
                 }
                 break;
@@ -2311,8 +2470,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 opts->control = false;
                 break;
             case OPT_NO_DISPLAY:
-                LOGW("--no-display is deprecated, use --no-playback instead.");
-                // fall through
+                LOGE("--no-display has been removed, use --no-playback "
+                     "instead.");
+                return false;
             case 'N':
                 opts->video_playback = false;
                 opts->audio_playback = false;
@@ -2398,32 +2558,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 opts->key_inject_mode = SC_KEY_INJECT_MODE_RAW;
                 break;
             case OPT_ROTATION:
-                LOGW("--rotation is deprecated, use --display-orientation "
-                     "instead.");
-                uint8_t rotation;
-                if (!parse_rotation(optarg, &rotation)) {
-                    return false;
-                }
-                assert(rotation <= 3);
-                switch (rotation) {
-                    case 0:
-                        opts->display_orientation = SC_ORIENTATION_0;
-                        break;
-                    case 1:
-                        // rotation 1 was 90° counterclockwise, but orientation
-                        // is expressed clockwise
-                        opts->display_orientation = SC_ORIENTATION_270;
-                        break;
-                    case 2:
-                        opts->display_orientation = SC_ORIENTATION_180;
-                        break;
-                    case 3:
-                        // rotation 3 was 270° counterclockwise, but orientation
-                        // is expressed clockwise
-                        opts->display_orientation = SC_ORIENTATION_90;
-                        break;
-                }
-                break;
+                LOGE("--rotation has been removed, use --orientation or "
+                     "--capture-orientation instead.");
+                return false;
             case OPT_DISPLAY_ORIENTATION:
                 if (!parse_orientation(optarg, &opts->display_orientation)) {
                     return false;
@@ -2484,23 +2621,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 }
                 break;
             case OPT_FORWARD_ALL_CLICKS:
-                LOGW("--forward-all-clicks is deprecated, "
+                LOGE("--forward-all-clicks has been removed, "
                      "use --mouse-bind=++++ instead.");
-                opts->mouse_bindings = (struct sc_mouse_bindings) {
-                    .pri = {
-                        .right_click = SC_MOUSE_BINDING_CLICK,
-                        .middle_click = SC_MOUSE_BINDING_CLICK,
-                        .click4 = SC_MOUSE_BINDING_CLICK,
-                        .click5 = SC_MOUSE_BINDING_CLICK,
-                    },
-                    .sec = {
-                        .right_click = SC_MOUSE_BINDING_CLICK,
-                        .middle_click = SC_MOUSE_BINDING_CLICK,
-                        .click4 = SC_MOUSE_BINDING_CLICK,
-                        .click5 = SC_MOUSE_BINDING_CLICK,
-                    },
-                };
-                break;
+                return false;
             case OPT_LEGACY_PASTE:
                 opts->legacy_paste = true;
                 break;
@@ -2508,7 +2631,11 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 opts->power_off_on_close = true;
                 break;
             case OPT_DISPLAY_BUFFER:
-                if (!parse_buffering_time(optarg, &opts->display_buffer)) {
+                LOGE("--display-buffer has been removed, use --video-buffer "
+                     "instead.");
+                return false;
+            case OPT_VIDEO_BUFFER:
+                if (!parse_buffering_time(optarg, &opts->video_buffer)) {
                     return false;
                 }
                 break;
@@ -2591,6 +2718,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             case OPT_LIST_CAMERA_SIZES:
                 opts->list |= SC_OPTION_LIST_CAMERA_SIZES;
                 break;
+            case OPT_LIST_APPS:
+                opts->list |= SC_OPTION_LIST_APPS;
+                break;
             case OPT_REQUIRE_AUDIO:
                 opts->require_audio = true;
                 break;
@@ -2664,6 +2794,33 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                     return false;
                 }
                 break;
+            case OPT_NEW_DISPLAY:
+                opts->new_display = optarg ? optarg : "";
+                break;
+            case OPT_START_APP:
+                opts->start_app = optarg;
+                break;
+            case OPT_SCREEN_OFF_TIMEOUT:
+                if (!parse_screen_off_timeout(optarg,
+                                              &opts->screen_off_timeout)) {
+                    return false;
+                }
+                break;
+            case OPT_ANGLE:
+                opts->angle = optarg;
+                break;
+            case OPT_NO_VD_DESTROY_CONTENT:
+                opts->vd_destroy_content = false;
+                break;
+            case OPT_NO_VD_SYSTEM_DECORATIONS:
+                opts->vd_system_decorations = false;
+                break;
+            case OPT_DISPLAY_IME_POLICY:
+                if (!parse_display_ime_policy(optarg,
+                                              &opts->display_ime_policy)) {
+                    return false;
+                }
+                break;
             default:
                 // getopt prints the error message on stderr
                 return false;
@@ -2702,9 +2859,10 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
 #endif
 
     if (!opts->window) {
-        // Without window, there cannot be any video playback or control
+        // Without window, there cannot be any video playback
         opts->video_playback = false;
-        opts->control = false;
+        // Controls are still possible, allowing for options like
+        // --turn-screen-off
     }
 
     if (!opts->video) {
@@ -2758,13 +2916,6 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             return false;
         }
 
-        if (opts->lock_video_orientation ==
-                SC_LOCK_VIDEO_ORIENTATION_UNLOCKED) {
-            LOGI("Video orientation is locked for v4l2 sink. "
-                 "See --lock-video-orientation.");
-            opts->lock_video_orientation = SC_LOCK_VIDEO_ORIENTATION_INITIAL;
-        }
-
         // V4L2 could not handle size change.
         // Do not log because downsizing on error is the default behavior,
         // not an explicit request from the user.
@@ -2772,7 +2923,7 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
     }
 
     if (opts->v4l2_buffer && !opts->v4l2_device) {
-        LOGE("V4L2 buffer value without V4L2 sink\n");
+        LOGE("V4L2 buffer value without V4L2 sink");
         return false;
     }
 #endif
@@ -2791,8 +2942,8 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             if (otg) {
                 opts->mouse_input_mode = SC_MOUSE_INPUT_MODE_AOA;
             } else if (!opts->video_playback) {
-                LOGI("No video mirroring, mouse mode switched to UHID");
-                opts->mouse_input_mode = SC_MOUSE_INPUT_MODE_UHID;
+                LOGI("No video mirroring, SDK mouse disabled");
+                opts->mouse_input_mode = SC_MOUSE_INPUT_MODE_DISABLED;
             } else {
                 opts->mouse_input_mode = SC_MOUSE_INPUT_MODE_SDK;
             }
@@ -2841,6 +2992,18 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
         } else {
             opts->mouse_bindings.pri = forward;
             opts->mouse_bindings.sec = default_shortcuts;
+        }
+    }
+
+    if (opts->new_display) {
+        if (opts->video_source != SC_VIDEO_SOURCE_DISPLAY) {
+            LOGE("--new-display is only available with --video-source=display");
+            return false;
+        }
+
+        if (!opts->video) {
+            LOGE("--new-display is incompatible with --no-video");
+            return false;
         }
     }
 
@@ -2914,6 +3077,12 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             return false;
         }
 
+        if (opts->display_ime_policy != SC_DISPLAY_IME_POLICY_UNDEFINED) {
+            LOGE("--display-ime-policy is only available with "
+                 "--video-source=display");
+            return false;
+        }
+
         if (opts->camera_id && opts->camera_facing != SC_CAMERA_FACING_ANY) {
             LOGE("Cannot specify both --camera-id and --camera-facing");
             return false;
@@ -2947,6 +3116,17 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
             || opts->camera_high_speed
             || opts->camera_size) {
         LOGE("Camera options are only available with --video-source=camera");
+        return false;
+    }
+
+    if (opts->display_id != 0 && opts->new_display) {
+        LOGE("Cannot specify both --display-id and --new-display");
+        return false;
+    }
+
+    if (opts->display_ime_policy != SC_DISPLAY_IME_POLICY_UNDEFINED
+            && opts->display_id == 0 && !opts->new_display) {
+        LOGE("--display-ime-policy is only supported on a secondary display");
         return false;
     }
 
@@ -3080,6 +3260,10 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
         }
         if (opts->power_off_on_close) {
             LOGE("Cannot request power off on close if control is disabled");
+            return false;
+        }
+        if (opts->start_app) {
+            LOGE("Cannot start an Android app if control is disabled");
             return false;
         }
     }

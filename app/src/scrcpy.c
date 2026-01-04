@@ -1,10 +1,11 @@
 #include "scrcpy.h"
 
+#include <assert.h>
+#include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <libavformat/avformat.h>
-#include <sys/time.h>
 #include <SDL2/SDL.h>
 
 #ifdef _WIN32
@@ -37,9 +38,9 @@
 #endif
 #include "util/acksync.h"
 #include "util/log.h"
-#include "util/net.h"
 #include "util/rand.h"
 #include "util/timeout.h"
+#include "util/tick.h"
 #ifdef HAVE_V4L2
 # include "v4l2_sink.h"
 #endif
@@ -53,7 +54,7 @@ struct scrcpy {
     struct sc_decoder video_decoder;
     struct sc_decoder audio_decoder;
     struct sc_recorder recorder;
-    struct sc_delay_buffer display_buffer;
+    struct sc_delay_buffer video_buffer;
 #ifdef HAVE_V4L2
     struct sc_v4l2_sink v4l2_sink;
     struct sc_delay_buffer v4l2_buffer;
@@ -92,7 +93,7 @@ struct scrcpy {
 
 #ifdef _WIN32
 static BOOL WINAPI windows_ctrl_handler(DWORD ctrl_type) {
-    if (ctrl_type == CTRL_C_EVENT) {
+    if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT) {
         sc_push_event(SDL_QUIT);
         return TRUE;
     }
@@ -105,6 +106,17 @@ sdl_set_hints(const char *render_driver) {
     if (render_driver && !SDL_SetHint(SDL_HINT_RENDER_DRIVER, render_driver)) {
         LOGW("Could not set render driver");
     }
+
+    // App name used in various contexts (such as PulseAudio)
+#if defined(SCRCPY_SDL_HAS_HINT_APP_NAME)
+    if (!SDL_SetHint(SDL_HINT_APP_NAME, "scrcpy")) {
+        LOGW("Could not set app name");
+    }
+#elif defined(SCRCPY_SDL_HAS_HINT_AUDIO_DEVICE_APP_NAME)
+    if (!SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "scrcpy")) {
+        LOGW("Could not set audio device app name");
+    }
+#endif
 
     // Linear filtering
     if (!SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1")) {
@@ -164,7 +176,7 @@ sdl_configure(bool video_playback, bool disable_screensaver) {
 }
 
 static enum scrcpy_exit_code
-event_loop(struct scrcpy *s) {
+event_loop(struct scrcpy *s, bool has_screen) {
     SDL_Event event;
     while (SDL_WaitEvent(&event)) {
         switch (event.type) {
@@ -196,7 +208,7 @@ event_loop(struct scrcpy *s) {
                 break;
             }
             default:
-                if (!sc_screen_handle_event(&s->screen, &event)) {
+                if (has_screen && !sc_screen_handle_event(&s->screen, &event)) {
                     return SCRCPY_EXIT_FAILURE;
                 }
                 break;
@@ -428,9 +440,14 @@ scrcpy(struct scrcpy_options *options) {
         .video_bit_rate = options->video_bit_rate,
         .audio_bit_rate = options->audio_bit_rate,
         .max_fps = options->max_fps,
-        .lock_video_orientation = options->lock_video_orientation,
+        .angle = options->angle,
+        .screen_off_timeout = options->screen_off_timeout,
+        .capture_orientation = options->capture_orientation,
+        .capture_orientation_lock = options->capture_orientation_lock,
         .control = options->control,
         .display_id = options->display_id,
+        .new_display = options->new_display,
+        .display_ime_policy = options->display_ime_policy,
         .video = options->video,
         .audio = options->audio,
         .audio_dup = options->audio_dup,
@@ -454,6 +471,8 @@ scrcpy(struct scrcpy_options *options) {
         .power_on = options->power_on,
         .kill_adb_on_close = options->kill_adb_on_close,
         .camera_high_speed = options->camera_high_speed,
+        .vd_destroy_content = options->vd_destroy_content,
+        .vd_system_decorations = options->vd_system_decorations,
         .list = options->list,
     };
 
@@ -814,11 +833,11 @@ aoa_complete:
 
         if (options->video_playback) {
             struct sc_frame_source *src = &s->video_decoder.frame_source;
-            if (options->display_buffer) {
-                sc_delay_buffer_init(&s->display_buffer,
-                                     options->display_buffer, true);
-                sc_frame_source_add_sink(src, &s->display_buffer.frame_sink);
-                src = &s->display_buffer.frame_source;
+            if (options->video_buffer) {
+                sc_delay_buffer_init(&s->video_buffer,
+                                     options->video_buffer, true);
+                sc_frame_source_add_sink(src, &s->video_buffer.frame_sink);
+                src = &s->video_buffer.frame_source;
             }
 
             sc_frame_source_add_sink(src, &s->screen.frame_sink);
@@ -872,11 +891,11 @@ aoa_complete:
     // everything is set up
     if (options->control && options->turn_screen_off) {
         struct sc_control_msg msg;
-        msg.type = SC_CONTROL_MSG_TYPE_SET_SCREEN_POWER_MODE;
-        msg.set_screen_power_mode.mode = SC_SCREEN_POWER_MODE_OFF;
+        msg.type = SC_CONTROL_MSG_TYPE_SET_DISPLAY_POWER;
+        msg.set_display_power.on = false;
 
         if (!sc_controller_push_msg(&s->controller, &msg)) {
-            LOGW("Could not request 'set screen power mode'");
+            LOGW("Could not request 'set display power'");
         }
     }
 
@@ -906,7 +925,26 @@ aoa_complete:
         init_sdl_gamepads();
     }
 
-    ret = event_loop(s);
+    if (options->control && options->start_app) {
+        assert(controller);
+
+        char *name = strdup(options->start_app);
+        if (!name) {
+            LOG_OOM();
+            goto end;
+        }
+
+        struct sc_control_msg msg;
+        msg.type = SC_CONTROL_MSG_TYPE_START_APP;
+        msg.start_app.name = name;
+
+        if (!sc_controller_push_msg(controller, &msg)) {
+            LOGW("Could not request start app '%s'", name);
+            free(name);
+        }
+    }
+
+    ret = event_loop(s, options->window);
     terminate_event_loop();
     LOGD("quit...");
 

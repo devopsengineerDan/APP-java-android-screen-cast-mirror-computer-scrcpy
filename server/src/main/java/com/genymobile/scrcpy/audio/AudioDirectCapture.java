@@ -1,5 +1,6 @@
 package com.genymobile.scrcpy.audio;
 
+import com.genymobile.scrcpy.AndroidVersions;
 import com.genymobile.scrcpy.FakeContext;
 import com.genymobile.scrcpy.Workarounds;
 import com.genymobile.scrcpy.util.Ln;
@@ -11,7 +12,6 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.media.AudioRecord;
 import android.media.MediaCodec;
-import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.SystemClock;
 
@@ -31,25 +31,14 @@ public class AudioDirectCapture implements AudioCapture {
     private AudioRecordReader reader;
 
     public AudioDirectCapture(AudioSource audioSource) {
-        this.audioSource = getAudioSourceValue(audioSource);
+        this.audioSource = audioSource.getDirectAudioSource();
     }
 
-    private static int getAudioSourceValue(AudioSource audioSource) {
-        switch (audioSource) {
-            case OUTPUT:
-                return MediaRecorder.AudioSource.REMOTE_SUBMIX;
-            case MIC:
-                return MediaRecorder.AudioSource.MIC;
-            default:
-                throw new IllegalArgumentException("Unsupported audio source: " + audioSource);
-        }
-    }
-
-    @TargetApi(Build.VERSION_CODES.M)
+    @TargetApi(AndroidVersions.API_23_ANDROID_6_0)
     @SuppressLint({"WrongConstant", "MissingPermission"})
     private static AudioRecord createAudioRecord(int audioSource) {
         AudioRecord.Builder builder = new AudioRecord.Builder();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= AndroidVersions.API_31_ANDROID_12) {
             // On older APIs, Workarounds.fillAppInfo() must be called beforehand
             builder.setContext(FakeContext.get());
         }
@@ -117,7 +106,7 @@ public class AudioDirectCapture implements AudioCapture {
 
     @Override
     public void checkCompatibility() throws AudioCaptureException {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT < AndroidVersions.API_30_ANDROID_11) {
             Ln.w("Audio disabled: it is not supported before Android 11");
             throw new AudioCaptureException();
         }
@@ -125,7 +114,7 @@ public class AudioDirectCapture implements AudioCapture {
 
     @Override
     public void start() throws AudioCaptureException {
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT == AndroidVersions.API_30_ANDROID_11) {
             startWorkaroundAndroid11();
             try {
                 tryStartRecording(5, 100);
@@ -146,7 +135,7 @@ public class AudioDirectCapture implements AudioCapture {
     }
 
     @Override
-    @TargetApi(Build.VERSION_CODES.N)
+    @TargetApi(AndroidVersions.API_24_ANDROID_7_0)
     public int read(ByteBuffer outDirectBuffer, MediaCodec.BufferInfo outBufferInfo) {
         return reader.read(outDirectBuffer, outBufferInfo);
     }

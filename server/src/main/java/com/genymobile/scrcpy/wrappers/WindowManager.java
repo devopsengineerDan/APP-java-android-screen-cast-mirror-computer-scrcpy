@@ -1,15 +1,23 @@
 package com.genymobile.scrcpy.wrappers;
 
+import com.genymobile.scrcpy.AndroidVersions;
 import com.genymobile.scrcpy.util.Ln;
 
 import android.annotation.TargetApi;
+import android.os.Build;
 import android.os.IInterface;
-import android.view.IDisplayFoldListener;
-import android.view.IRotationWatcher;
+import android.view.IDisplayWindowListener;
 
 import java.lang.reflect.Method;
 
 public final class WindowManager {
+
+    @SuppressWarnings("checkstyle:LineLength")
+    // <https://android.googlesource.com/platform/frameworks/base.git/+/2103ff441c66772c80c8560e322dcd9a45be7dcd/core/java/android/view/WindowManager.java#692>
+    public static final int DISPLAY_IME_POLICY_LOCAL = 0;
+    public static final int DISPLAY_IME_POLICY_FALLBACK_DISPLAY = 1;
+    public static final int DISPLAY_IME_POLICY_HIDE = 2;
+
     private final IInterface manager;
     private Method getRotationMethod;
 
@@ -21,6 +29,9 @@ public final class WindowManager {
 
     private Method thawDisplayRotationMethod;
     private int thawDisplayRotationMethodVersion;
+
+    private Method getDisplayImePolicyMethod;
+    private Method setDisplayImePolicyMethod;
 
     static WindowManager create() {
         IInterface manager = ServiceManager.getService("window", "android.view.IWindowManager");
@@ -180,33 +191,77 @@ public final class WindowManager {
         }
     }
 
-    public void registerRotationWatcher(IRotationWatcher rotationWatcher, int displayId) {
+    @TargetApi(AndroidVersions.API_30_ANDROID_11)
+    public int[] registerDisplayWindowListener(IDisplayWindowListener listener) {
         try {
-            Class<?> cls = manager.getClass();
-            try {
-                // display parameter added since this commit:
-                // https://android.googlesource.com/platform/frameworks/base/+/35fa3c26adcb5f6577849fd0df5228b1f67cf2c6%5E%21/#F1
-                cls.getMethod("watchRotation", IRotationWatcher.class, int.class).invoke(manager, rotationWatcher, displayId);
-            } catch (NoSuchMethodException e) {
-                // old version
-                if (displayId != 0) {
-                    Ln.e("Secondary display rotation not supported on this device");
-                    return;
-                }
-                cls.getMethod("watchRotation", IRotationWatcher.class).invoke(manager, rotationWatcher);
-            }
+            return (int[]) manager.getClass().getMethod("registerDisplayWindowListener", IDisplayWindowListener.class).invoke(manager, listener);
         } catch (Exception e) {
-            Ln.e("Could not register rotation watcher", e);
+            Ln.e("Could not register display window listener", e);
+        }
+        return null;
+    }
+
+    @TargetApi(AndroidVersions.API_30_ANDROID_11)
+    public void unregisterDisplayWindowListener(IDisplayWindowListener listener) {
+        try {
+            manager.getClass().getMethod("unregisterDisplayWindowListener", IDisplayWindowListener.class).invoke(manager, listener);
+        } catch (Exception e) {
+            Ln.e("Could not unregister display window listener", e);
         }
     }
 
-    @TargetApi(29)
-    public void registerDisplayFoldListener(IDisplayFoldListener foldListener) {
+    @TargetApi(AndroidVersions.API_29_ANDROID_10)
+    private Method getGetDisplayImePolicyMethod() throws NoSuchMethodException {
+        if (getDisplayImePolicyMethod == null) {
+            if (Build.VERSION.SDK_INT >= AndroidVersions.API_31_ANDROID_12) {
+                getDisplayImePolicyMethod = manager.getClass().getMethod("getDisplayImePolicy", int.class);
+            } else {
+                getDisplayImePolicyMethod = manager.getClass().getMethod("shouldShowIme", int.class);
+            }
+        }
+        return getDisplayImePolicyMethod;
+    }
+
+    @TargetApi(AndroidVersions.API_29_ANDROID_10)
+    public int getDisplayImePolicy(int displayId) {
         try {
-            Class<?> cls = manager.getClass();
-            cls.getMethod("registerDisplayFoldListener", IDisplayFoldListener.class).invoke(manager, foldListener);
-        } catch (Exception e) {
-            Ln.e("Could not register display fold listener", e);
+            Method method = getGetDisplayImePolicyMethod();
+            if (Build.VERSION.SDK_INT >= AndroidVersions.API_31_ANDROID_12) {
+                return (int) method.invoke(manager, displayId);
+            }
+            boolean shouldShowIme = (boolean) method.invoke(manager, displayId);
+            return shouldShowIme ? DISPLAY_IME_POLICY_LOCAL : DISPLAY_IME_POLICY_FALLBACK_DISPLAY;
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not invoke method", e);
+            return -1;
+        }
+    }
+
+    @TargetApi(AndroidVersions.API_29_ANDROID_10)
+    private Method getSetDisplayImePolicyMethod() throws NoSuchMethodException {
+        if (setDisplayImePolicyMethod == null) {
+            if (Build.VERSION.SDK_INT >= AndroidVersions.API_31_ANDROID_12) {
+                setDisplayImePolicyMethod = manager.getClass().getMethod("setDisplayImePolicy", int.class, int.class);
+            } else {
+                setDisplayImePolicyMethod = manager.getClass().getMethod("setShouldShowIme", int.class, boolean.class);
+            }
+        }
+        return setDisplayImePolicyMethod;
+    }
+
+    @TargetApi(AndroidVersions.API_29_ANDROID_10)
+    public void setDisplayImePolicy(int displayId, int displayImePolicy) {
+        try {
+            Method method = getSetDisplayImePolicyMethod();
+            if (Build.VERSION.SDK_INT >= AndroidVersions.API_31_ANDROID_12) {
+                method.invoke(manager, displayId, displayImePolicy);
+            } else if (displayImePolicy != DISPLAY_IME_POLICY_HIDE) {
+                method.invoke(manager, displayId, displayImePolicy == DISPLAY_IME_POLICY_LOCAL);
+            } else {
+                Ln.w("DISPLAY_IME_POLICY_HIDE is not supported before Android 12");
+            }
+        } catch (ReflectiveOperationException e) {
+            Ln.e("Could not invoke method", e);
         }
     }
 }

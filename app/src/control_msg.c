@@ -22,9 +22,6 @@
 #define MOTIONEVENT_ACTION_LABEL(value) \
     ENUM_TO_LABEL(android_motionevent_action_labels, value)
 
-#define SCREEN_POWER_MODE_LABEL(value) \
-    ENUM_TO_LABEL(screen_power_mode_labels, value)
-
 static const char *const android_keyevent_action_labels[] = {
     "down",
     "up",
@@ -45,14 +42,6 @@ static const char *const android_motionevent_action_labels[] = {
     "hover-exit",
     "btn-press",
     "btn-release",
-};
-
-static const char *const screen_power_mode_labels[] = {
-    "off",
-    "doze",
-    "normal",
-    "doze-suspend",
-    "suspend",
 };
 
 static const char *const copy_key_labels[] = {
@@ -138,10 +127,14 @@ sc_control_msg_serialize(const struct sc_control_msg *msg, uint8_t *buf) {
             return 32;
         case SC_CONTROL_MSG_TYPE_INJECT_SCROLL_EVENT:
             write_position(&buf[1], &msg->inject_scroll_event.position);
-            int16_t hscroll =
-                sc_float_to_i16fp(msg->inject_scroll_event.hscroll);
-            int16_t vscroll =
-                sc_float_to_i16fp(msg->inject_scroll_event.vscroll);
+            // Accept values in the range [-16, 16].
+            // Normalize to [-1, 1] in order to use sc_float_to_i16fp().
+            float hscroll_norm = msg->inject_scroll_event.hscroll / 16;
+            hscroll_norm = CLAMP(hscroll_norm, -1, 1);
+            float vscroll_norm = msg->inject_scroll_event.vscroll / 16;
+            vscroll_norm = CLAMP(vscroll_norm, -1, 1);
+            int16_t hscroll = sc_float_to_i16fp(hscroll_norm);
+            int16_t vscroll = sc_float_to_i16fp(vscroll_norm);
             sc_write16be(&buf[13], (uint16_t) hscroll);
             sc_write16be(&buf[15], (uint16_t) vscroll);
             sc_write32be(&buf[17], msg->inject_scroll_event.buttons);
@@ -158,13 +151,15 @@ sc_control_msg_serialize(const struct sc_control_msg *msg, uint8_t *buf) {
             size_t len = write_string(&buf[10], msg->set_clipboard.text,
                                       SC_CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH);
             return 10 + len;
-        case SC_CONTROL_MSG_TYPE_SET_SCREEN_POWER_MODE:
-            buf[1] = msg->set_screen_power_mode.mode;
+        case SC_CONTROL_MSG_TYPE_SET_DISPLAY_POWER:
+            buf[1] = msg->set_display_power.on;
             return 2;
         case SC_CONTROL_MSG_TYPE_UHID_CREATE:
             sc_write16be(&buf[1], msg->uhid_create.id);
+            sc_write16be(&buf[3], msg->uhid_create.vendor_id);
+            sc_write16be(&buf[5], msg->uhid_create.product_id);
 
-            size_t index = 3;
+            size_t index = 7;
             index += write_string_tiny(&buf[index], msg->uhid_create.name, 127);
 
             sc_write16be(&buf[index], msg->uhid_create.report_desc_size);
@@ -183,11 +178,16 @@ sc_control_msg_serialize(const struct sc_control_msg *msg, uint8_t *buf) {
         case SC_CONTROL_MSG_TYPE_UHID_DESTROY:
             sc_write16be(&buf[1], msg->uhid_destroy.id);
             return 3;
+        case SC_CONTROL_MSG_TYPE_START_APP: {
+            size_t len = write_string_tiny(&buf[1], msg->start_app.name, 255);
+            return 1 + len;
+        }
         case SC_CONTROL_MSG_TYPE_EXPAND_NOTIFICATION_PANEL:
         case SC_CONTROL_MSG_TYPE_EXPAND_SETTINGS_PANEL:
         case SC_CONTROL_MSG_TYPE_COLLAPSE_PANELS:
         case SC_CONTROL_MSG_TYPE_ROTATE_DEVICE:
         case SC_CONTROL_MSG_TYPE_OPEN_HARD_KEYBOARD_SETTINGS:
+        case SC_CONTROL_MSG_TYPE_RESET_VIDEO:
             // no additional data
             return 1;
         default:
@@ -264,9 +264,9 @@ sc_control_msg_log(const struct sc_control_msg *msg) {
                      msg->set_clipboard.paste ? "paste" : "nopaste",
                      msg->set_clipboard.text);
             break;
-        case SC_CONTROL_MSG_TYPE_SET_SCREEN_POWER_MODE:
-            LOG_CMSG("power mode %s",
-                     SCREEN_POWER_MODE_LABEL(msg->set_screen_power_mode.mode));
+        case SC_CONTROL_MSG_TYPE_SET_DISPLAY_POWER:
+            LOG_CMSG("display power %s",
+                     msg->set_display_power.on ? "on" : "off");
             break;
         case SC_CONTROL_MSG_TYPE_EXPAND_NOTIFICATION_PANEL:
             LOG_CMSG("expand notification panel");
@@ -284,9 +284,13 @@ sc_control_msg_log(const struct sc_control_msg *msg) {
             // Quote only if name is not null
             const char *name = msg->uhid_create.name;
             const char *quote = name ? "\"" : "";
-            LOG_CMSG("UHID create [%" PRIu16 "] name=%s%s%s "
-                     "report_desc_size=%" PRIu16, msg->uhid_create.id,
-                     quote, name, quote, msg->uhid_create.report_desc_size);
+            LOG_CMSG("UHID create [%" PRIu16 "] %04" PRIx16 ":%04" PRIx16
+                     " name=%s%s%s report_desc_size=%" PRIu16,
+                     msg->uhid_create.id,
+                     msg->uhid_create.vendor_id,
+                     msg->uhid_create.product_id,
+                     quote, name, quote,
+                     msg->uhid_create.report_desc_size);
             break;
         }
         case SC_CONTROL_MSG_TYPE_UHID_INPUT: {
@@ -307,6 +311,12 @@ sc_control_msg_log(const struct sc_control_msg *msg) {
             break;
         case SC_CONTROL_MSG_TYPE_OPEN_HARD_KEYBOARD_SETTINGS:
             LOG_CMSG("open hard keyboard settings");
+            break;
+        case SC_CONTROL_MSG_TYPE_START_APP:
+            LOG_CMSG("start app \"%s\"", msg->start_app.name);
+            break;
+        case SC_CONTROL_MSG_TYPE_RESET_VIDEO:
+            LOG_CMSG("reset video");
             break;
         default:
             LOG_CMSG("unknown type: %u", (unsigned) msg->type);
@@ -332,6 +342,9 @@ sc_control_msg_destroy(struct sc_control_msg *msg) {
             break;
         case SC_CONTROL_MSG_TYPE_SET_CLIPBOARD:
             free(msg->set_clipboard.text);
+            break;
+        case SC_CONTROL_MSG_TYPE_START_APP:
+            free(msg->start_app.name);
             break;
         default:
             // do nothing

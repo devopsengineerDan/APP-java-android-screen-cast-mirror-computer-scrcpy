@@ -1,16 +1,15 @@
 #ifndef SC_AOA_HID_H
 #define SC_AOA_HID_H
 
-#include <stdint.h>
-#include <stdbool.h>
+#include "common.h"
 
-#include <libusb-1.0/libusb.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "hid/hid_event.h"
-#include "usb.h"
+#include "usb/usb.h"
 #include "util/acksync.h"
 #include "util/thread.h"
-#include "util/tick.h"
 #include "util/vecdeque.h"
 
 enum sc_aoa_event_type {

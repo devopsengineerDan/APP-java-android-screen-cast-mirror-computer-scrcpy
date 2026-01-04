@@ -4,11 +4,13 @@
 #include "common.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <SDL2/SDL.h>
 
-#include "keyboard_aoa.h"
-#include "mouse_aoa.h"
-#include "gamepad_aoa.h"
+#include "mouse_capture.h"
+#include "usb/gamepad_aoa.h"
+#include "usb/keyboard_aoa.h"
+#include "usb/mouse_aoa.h"
 
 struct sc_screen_otg {
     struct sc_keyboard_aoa *keyboard;
@@ -19,8 +21,7 @@ struct sc_screen_otg {
     SDL_Renderer *renderer;
     SDL_Texture *texture;
 
-    // See equivalent mechanism in screen.h
-    SDL_Keycode mouse_capture_key_pressed;
+    struct sc_mouse_capture mc;
 };
 
 struct sc_screen_otg_params {
@@ -35,6 +36,7 @@ struct sc_screen_otg_params {
     uint16_t window_width;
     uint16_t window_height;
     bool window_borderless;
+    uint8_t shortcut_mods; // OR of enum sc_shortcut_mod values
 };
 
 bool
