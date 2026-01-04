@@ -1,3 +1,17 @@
+# EXECUTION
+
+```
+1.  ===> Debug Mode -- Brings Vulnerability to Android Phone.
+    ===> Ensure device and Android Phone are connected on the same network via internet.
+2. USB Debug Mode. Then Click on scrcpy-noconsole
+3. - WIFI Debug Mode. Pair device with pairing code. 
+    - Open download zip file. Extract. Open folder location on terminal. And Run:
+./adb pair <ip address>:<port>
+./scrcpy
+````
+
+# ALTERNATIVE APP : Airdroid Cast (android app - Playstore)
+
 **This GitHub repo (<https://github.com/Genymobile/scrcpy>) is the only official
 source for the project. Do not download releases from random websites, even if
 their name contains `scrcpy`.**
